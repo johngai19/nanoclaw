@@ -436,7 +436,7 @@ async function runQuery(
           command: 'npx',
           args: ['-y', '@modelcontextprotocol/server-brave-search'],
           env: {
-            BRAVE_API_KEY: process.env.BRAVE_SEARCH_API_KEY || process.env.BRAVE_API_KEY || '',
+            BRAVE_API_KEY: process.env.BRAVE_API_KEY || process.env.BRAVE_SEARCH_API_KEY || '',
           },
         },
         context7: {
@@ -470,9 +470,8 @@ async function runQuery(
         'postgres': {
           command: 'npx',
           args: [
-            '-y', '@bytebase/dbhub',
-            '--transport', 'stdio',
-            '--dsn', 'postgresql://mcp_user:mcp_password@host.docker.internal:5432/mcp_db',
+            '-y', '@modelcontextprotocol/server-postgres',
+            'postgresql://mcp_user:mcp_password@host.docker.internal:5432/mcp_db',
           ],
         },
         'mongodb': {

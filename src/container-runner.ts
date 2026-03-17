@@ -247,6 +247,7 @@ function buildContainerArgs(
     'GITHUB_TOKEN',
     'BRAVE_BASE_URL',
     'BRAVE_SEARCH_API_KEY',
+    'BRAVE_API_KEY',
     'AZURE_OPENAI_URL',
     'AZURE_OPENAI_API_KEY',
     'AZURE_OPENAI_URL_2',
