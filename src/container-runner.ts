@@ -261,6 +261,8 @@ function buildContainerArgs(
     'SUPABASE_ACCESS_TOKEN',
     'PODBEAN_ID',
     'PODBEAN_SECRET',
+    'WORDPRESS_ACCESS_TOKEN',
+    'WORDPRESS_ID',
   ];
   const injectedEnv = readEnvFile(INJECTED_KEYS);
   for (const key of INJECTED_KEYS) {
