@@ -259,6 +259,8 @@ function buildContainerArgs(
     'CONTEXT7_TOKEN',
     'HOSTINGER_API_KEY',
     'SUPABASE_ACCESS_TOKEN',
+    'PODBEAN_ID',
+    'PODBEAN_SECRET',
   ];
   const injectedEnv = readEnvFile(INJECTED_KEYS);
   for (const key of INJECTED_KEYS) {

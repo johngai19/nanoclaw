@@ -17,7 +17,9 @@ import { logger } from './logger.js';
 /** True if the text is primarily Chinese (>20% CJK characters). */
 export function isChinese(text: string): boolean {
   if (!text) return false;
-  const cjk = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf\u{20000}-\u{2a6df}]/gu) || []).length;
+  const cjk = (
+    text.match(/[\u4e00-\u9fff\u3400-\u4dbf\u{20000}-\u{2a6df}]/gu) || []
+  ).length;
   return cjk / text.length > 0.2;
 }
 
@@ -49,7 +51,13 @@ function postRaw(
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
         res.on('end', () => {
-          logger.warn({ status: res.statusCode, body: Buffer.concat(chunks).toString().slice(0, 200) }, 'TTS non-2xx');
+          logger.warn(
+            {
+              status: res.statusCode,
+              body: Buffer.concat(chunks).toString().slice(0, 200),
+            },
+            'TTS non-2xx',
+          );
           resolve(null);
         });
         return;
@@ -59,7 +67,10 @@ function postRaw(
       res.on('end', () => resolve(Buffer.concat(chunks)));
       res.on('error', () => resolve(null));
     });
-    req.on('error', (err) => { logger.warn({ err }, 'TTS request error'); resolve(null); });
+    req.on('error', (err) => {
+      logger.warn({ err }, 'TTS request error');
+      resolve(null);
+    });
     req.write(bodyBuf);
     req.end();
   });
@@ -74,23 +85,38 @@ async function azureTTS(text: string): Promise<Buffer | null> {
 
   // Try Azure Speech Service SSML endpoint if the URL looks like a speech endpoint
   // Otherwise use Azure OpenAI TTS compatible endpoint
-  const isSpeechUrl = baseUrl.includes('.speech.microsoft.com') || baseUrl.includes('.tts.speech');
+  const isSpeechUrl =
+    baseUrl.includes('.speech.microsoft.com') ||
+    baseUrl.includes('.tts.speech');
   if (isSpeechUrl) {
-    const ssml = `<speak version='1.0' xml:lang='en-US'><voice name='en-US-AnnaNeural'>${text.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] ?? c))}</voice></speak>`;
-    return postRaw(`${baseUrl}`, {
-      'Ocp-Apim-Subscription-Key': apiKey,
-      'Content-Type': 'application/ssml+xml',
-      'X-Microsoft-OutputFormat': 'ogg-16khz-16bit-mono-opus',
-    }, ssml);
+    const ssml = `<speak version='1.0' xml:lang='en-US'><voice name='en-US-AnnaNeural'>${text.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] ?? c)}</voice></speak>`;
+    return postRaw(
+      `${baseUrl}`,
+      {
+        'Ocp-Apim-Subscription-Key': apiKey,
+        'Content-Type': 'application/ssml+xml',
+        'X-Microsoft-OutputFormat': 'ogg-16khz-16bit-mono-opus',
+      },
+      ssml,
+    );
   }
 
   // Azure OpenAI TTS deployment
-  const body = JSON.stringify({ model: 'tts-1', voice: 'nova', input: text, response_format: 'opus' });
+  const body = JSON.stringify({
+    model: 'tts-1',
+    voice: 'nova',
+    input: text,
+    response_format: 'opus',
+  });
   const url = `${baseUrl}/openai/deployments/tts/audio/speech?api-version=2024-05-01-preview`;
-  return postRaw(url, {
-    'api-key': apiKey,
-    'Content-Type': 'application/json',
-  }, body);
+  return postRaw(
+    url,
+    {
+      'api-key': apiKey,
+      'Content-Type': 'application/json',
+    },
+    body,
+  );
 }
 
 /** SiliconFlow IndexTTS-2 — Chinese, anna voice. */
@@ -106,19 +132,32 @@ async function siliconflowTTS(text: string): Promise<Buffer | null> {
     input: text,
     response_format: 'opus',
   });
-  return postRaw(`${baseUrl}/v1/audio/speech`, {
-    Authorization: `Bearer ${apiKey}`,
-    'Content-Type': 'application/json',
-  }, body);
+  return postRaw(
+    `${baseUrl}/v1/audio/speech`,
+    {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body,
+  );
 }
 
 /** OpenAI TTS fallback — shimmer voice. */
 async function openaiTTS(text: string, apiKey: string): Promise<Buffer | null> {
-  const body = JSON.stringify({ model: 'tts-1', voice: 'shimmer', input: text, response_format: 'opus' });
-  return postRaw('https://api.openai.com/v1/audio/speech', {
-    Authorization: `Bearer ${apiKey}`,
-    'Content-Type': 'application/json',
-  }, body);
+  const body = JSON.stringify({
+    model: 'tts-1',
+    voice: 'shimmer',
+    input: text,
+    response_format: 'opus',
+  });
+  return postRaw(
+    'https://api.openai.com/v1/audio/speech',
+    {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body,
+  );
 }
 
 /**
@@ -128,7 +167,10 @@ async function openaiTTS(text: string, apiKey: string): Promise<Buffer | null> {
  *
  * Returns OGG/Opus buffer, or null on total failure.
  */
-export async function textToSpeech(text: string, openaiApiKey: string): Promise<Buffer | null> {
+export async function textToSpeech(
+  text: string,
+  openaiApiKey: string,
+): Promise<Buffer | null> {
   const truncated = text.length > 4000 ? text.slice(0, 4000) + '…' : text;
   const chinese = isChinese(truncated);
 
@@ -137,15 +179,23 @@ export async function textToSpeech(text: string, openaiApiKey: string): Promise<
   let result: Buffer | null = null;
   if (chinese) {
     result = await siliconflowTTS(truncated);
-    if (result) { logger.info({ len: truncated.length }, 'TTS: SiliconFlow'); return result; }
+    if (result) {
+      logger.info({ len: truncated.length }, 'TTS: SiliconFlow');
+      return result;
+    }
     logger.warn('SiliconFlow TTS failed, falling back to OpenAI');
   } else {
     result = await azureTTS(truncated);
-    if (result) { logger.info({ len: truncated.length }, 'TTS: Azure'); return result; }
+    if (result) {
+      logger.info({ len: truncated.length }, 'TTS: Azure');
+      return result;
+    }
     logger.warn('Azure TTS failed, falling back to OpenAI');
   }
 
   result = await openaiTTS(truncated, openaiApiKey);
-  if (result) { logger.info({ len: truncated.length }, 'TTS: OpenAI fallback'); }
+  if (result) {
+    logger.info({ len: truncated.length }, 'TTS: OpenAI fallback');
+  }
   return result;
 }

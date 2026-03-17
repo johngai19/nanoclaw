@@ -12,6 +12,9 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 
+import { readEnvFile } from '../env.js';
+import { textToSpeech } from '../tts.js';
+
 import {
   ASSISTANT_HAS_OWN_NUMBER,
   ASSISTANT_NAME,
@@ -46,6 +49,8 @@ export class WhatsAppChannel implements Channel {
   private groupSyncTimerStarted = false;
 
   private opts: WhatsAppChannelOpts;
+  /** Per-JID output mode: 'text' | 'voice' | 'both'. Default: 'text'. */
+  private chatOutputMode = new Map<string, 'text' | 'voice' | 'both'>();
 
   constructor(opts: WhatsAppChannelOpts) {
     this.opts = opts;
@@ -213,6 +218,33 @@ export class WhatsAppChannel implements Channel {
             // Skip protocol messages with no text content (encryption keys, read receipts, etc.)
             if (!content) continue;
 
+            // ── Voice mode commands (/voice /text /both) ──────────────────
+            const trimmed = content.trim().toLowerCase();
+            if (trimmed === '/voice') {
+              this.chatOutputMode.set(chatJid, 'voice');
+              await this.sock.sendMessage(chatJid, {
+                text: `${ASSISTANT_NAME}: 🔊 纯语音模式。/text 切换文字，/both 切换语音+文字。`,
+              });
+              logger.info({ chatJid }, 'WA output mode: voice');
+              continue;
+            }
+            if (trimmed === '/text') {
+              this.chatOutputMode.set(chatJid, 'text');
+              await this.sock.sendMessage(chatJid, {
+                text: `${ASSISTANT_NAME}: 💬 纯文字模式。/voice 切换语音，/both 切换语音+文字。`,
+              });
+              logger.info({ chatJid }, 'WA output mode: text');
+              continue;
+            }
+            if (trimmed === '/both') {
+              this.chatOutputMode.set(chatJid, 'both');
+              await this.sock.sendMessage(chatJid, {
+                text: `${ASSISTANT_NAME}: 🔊💬 语音+文字模式。/voice 纯语音，/text 纯文字。`,
+              });
+              logger.info({ chatJid }, 'WA output mode: both');
+              continue;
+            }
+
             const sender = msg.key.participant || msg.key.remoteJid || '';
             const senderName = msg.pushName || sender.split('@')[0];
 
@@ -246,11 +278,39 @@ export class WhatsAppChannel implements Channel {
     });
   }
 
+  /** Send a TTS voice note via WhatsApp. */
+  private async sendVoiceNote(jid: string, text: string): Promise<void> {
+    const env = readEnvFile(['OPENAI_API_KEY']);
+    const openaiKey = env.OPENAI_API_KEY || '';
+    try {
+      const audioBuffer = await textToSpeech(text, openaiKey);
+      if (!audioBuffer) {
+        logger.warn({ jid }, 'WA TTS returned null');
+        return;
+      }
+      await this.sock.sendMessage(jid, {
+        audio: audioBuffer,
+        mimetype: 'audio/ogg; codecs=opus',
+        ptt: true,
+      });
+      logger.info({ jid, length: text.length }, 'WA voice note sent (TTS)');
+    } catch (err) {
+      logger.warn({ jid, err }, 'WA TTS failed');
+    }
+  }
+
   async sendMessage(jid: string, text: string): Promise<void> {
-    // Prefix bot messages with assistant name so users know who's speaking.
-    // On a shared number, prefix is also needed in DMs (including self-chat)
-    // to distinguish bot output from user messages.
-    // Skip only when the assistant has its own dedicated phone number.
+    const mode = this.chatOutputMode.get(jid) ?? 'text';
+
+    // Voice output (voice or both)
+    if (mode === 'voice' || mode === 'both') {
+      if (this.connected) {
+        await this.sendVoiceNote(jid, text);
+      }
+      if (mode === 'voice') return; // skip text
+    }
+
+    // Text output (text or both)
     const prefixed = ASSISTANT_HAS_OWN_NUMBER
       ? text
       : `${ASSISTANT_NAME}: ${text}`;
@@ -267,7 +327,6 @@ export class WhatsAppChannel implements Channel {
       await this.sock.sendMessage(jid, { text: prefixed });
       logger.info({ jid, length: prefixed.length }, 'Message sent');
     } catch (err) {
-      // If send fails, queue it for retry on reconnect
       this.outgoingQueue.push({ jid, text: prefixed });
       logger.warn(
         { jid, err, queueSize: this.outgoingQueue.length },

@@ -4,6 +4,7 @@ import { Api, Bot } from 'grammy';
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
+import { textToSpeech } from '../tts.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -184,56 +185,6 @@ async function describeImage(
   });
 }
 
-/**
- * Convert text to speech using OpenAI TTS API.
- * Returns an OGG audio Buffer, or null on failure.
- */
-async function textToSpeech(
-  apiKey: string,
-  text: string,
-): Promise<Buffer | null> {
-  // Truncate long texts — TTS works best for conversational responses
-  const truncated = text.length > 4000 ? text.slice(0, 4000) + '…' : text;
-  const body = JSON.stringify({
-    model: 'tts-1',
-    voice: 'shimmer',
-    input: truncated,
-    response_format: 'opus',
-  });
-
-  return new Promise<Buffer | null>((resolve) => {
-    const req = https.request(
-      {
-        hostname: 'api.openai.com',
-        path: '/v1/audio/speech',
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        if (res.statusCode !== 200) {
-          logger.warn({ status: res.statusCode }, 'TTS API non-200');
-          resolve(null);
-          return;
-        }
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => resolve(Buffer.concat(chunks)));
-        res.on('error', () => resolve(null));
-      },
-    );
-    req.on('error', (err) => {
-      logger.error({ err }, 'TTS request error');
-      resolve(null);
-    });
-    req.write(body);
-    req.end();
-  });
-}
-
 // ── Channel ───────────────────────────────────────────────────────────────────
 
 export interface TelegramChannelOpts {
@@ -267,8 +218,8 @@ export class TelegramChannel implements Channel {
   private botToken: string;
   private openaiApiKey: string;
 
-  /** JIDs with voice output mode enabled (send TTS audio instead of text). */
-  private voiceOutputChats = new Set<string>();
+  /** Per-chat output mode: 'text' | 'voice' | 'both'. Default: 'text'. */
+  private chatOutputMode = new Map<string, 'text' | 'voice' | 'both'>();
 
   constructor(
     botToken: string,
@@ -304,23 +255,37 @@ export class TelegramChannel implements Channel {
       ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
-    // /voice — enable voice output (TTS) for this chat
+    // /voice — pure voice output
     this.bot.command('voice', (ctx) => {
       const jid = `tg:${ctx.chat.id}`;
-      this.voiceOutputChats.add(jid);
-      ctx.reply('🔊 语音输出已开启。发送 /text 切换回文字模式。');
-      logger.info({ jid }, 'Voice output enabled');
+      this.chatOutputMode.set(jid, 'voice');
+      ctx.reply('🔊 纯语音模式。/text 切换文字，/both 切换语音+文字。');
+      logger.info({ jid }, 'Output mode: voice');
     });
 
-    // /text — disable voice output
+    // /text — pure text output (default)
     this.bot.command('text', (ctx) => {
       const jid = `tg:${ctx.chat.id}`;
-      this.voiceOutputChats.delete(jid);
-      ctx.reply('💬 文字输出已开启。发送 /voice 切换回语音模式。');
-      logger.info({ jid }, 'Voice output disabled');
+      this.chatOutputMode.set(jid, 'text');
+      ctx.reply('💬 纯文字模式。/voice 切换语音，/both 切换语音+文字。');
+      logger.info({ jid }, 'Output mode: text');
     });
 
-    const TELEGRAM_BOT_COMMANDS = new Set(['chatid', 'ping', 'voice', 'text']);
+    // /both — voice + text output simultaneously
+    this.bot.command('both', (ctx) => {
+      const jid = `tg:${ctx.chat.id}`;
+      this.chatOutputMode.set(jid, 'both');
+      ctx.reply('🔊💬 语音+文字模式。/voice 纯语音，/text 纯文字。');
+      logger.info({ jid }, 'Output mode: both');
+    });
+
+    const TELEGRAM_BOT_COMMANDS = new Set([
+      'chatid',
+      'ping',
+      'voice',
+      'text',
+      'both',
+    ]);
 
     // ── Text messages ─────────────────────────────────────────────────────────
     this.bot.on('message:text', async (ctx) => {
@@ -516,10 +481,36 @@ export class TelegramChannel implements Channel {
     });
   }
 
+  /** Send TTS voice note to a Telegram chat. */
+  private async sendVoiceNote(numericId: string, text: string): Promise<void> {
+    try {
+      const audioBuffer = await textToSpeech(text, this.openaiApiKey);
+      if (!audioBuffer) return;
+      const { InputFile } = await import('grammy');
+      const file = new InputFile(audioBuffer, 'response.ogg');
+      try {
+        await this.bot!.api.sendVoice(numericId, file);
+      } catch (voiceErr: any) {
+        if (voiceErr?.description?.includes('VOICE_MESSAGES_FORBIDDEN')) {
+          const audioFile = new InputFile(audioBuffer, 'reply.ogg');
+          await this.bot!.api.sendAudio(numericId, audioFile, {
+            title: 'Reply',
+            performer: ASSISTANT_NAME,
+          });
+        } else throw voiceErr;
+      }
+      logger.info(
+        { jid: `tg:${numericId}`, length: text.length },
+        'Telegram voice message sent (TTS)',
+      );
+    } catch (err) {
+      logger.warn({ err }, 'TTS failed, falling back to text');
+    }
+  }
+
   /**
    * Send a message to a JID.
-   * If voice output mode is enabled for that chat and OPENAI_API_KEY is set,
-   * sends a TTS voice note instead of text.
+   * Respects per-chat output mode: text | voice | both.
    */
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.bot) {
@@ -528,44 +519,15 @@ export class TelegramChannel implements Channel {
     }
 
     const numericId = jid.replace(/^tg:/, '');
+    const mode = this.chatOutputMode.get(jid) ?? 'text';
 
-    // Voice output mode: send TTS audio
-    if (this.voiceOutputChats.has(jid)) {
-      const apiKey = this.openaiApiKey;
-      if (apiKey) {
-        try {
-          const audioBuffer = await textToSpeech(apiKey, text);
-          if (audioBuffer) {
-            const { InputFile } = await import('grammy');
-            const file = new InputFile(audioBuffer, 'response.ogg');
-            try {
-              // Try voice note first (circular waveform UI)
-              await this.bot.api.sendVoice(numericId, file);
-            } catch (voiceErr: any) {
-              // VOICE_MESSAGES_FORBIDDEN: user's privacy settings block voice notes
-              // Fall back to regular audio file which has no such restriction
-              if (voiceErr?.description?.includes('VOICE_MESSAGES_FORBIDDEN')) {
-                const audioFile = new InputFile(audioBuffer, 'reply.ogg');
-                await this.bot.api.sendAudio(numericId, audioFile, {
-                  title: 'Reply',
-                  performer: 'Andy',
-                });
-              } else {
-                throw voiceErr;
-              }
-            }
-            logger.info(
-              { jid, length: text.length },
-              'Telegram voice message sent (TTS)',
-            );
-          }
-        } catch (err) {
-          logger.warn({ err }, 'TTS failed, falling back to text');
-        }
-      }
+    // Voice output (voice or both)
+    if (mode === 'voice' || mode === 'both') {
+      await this.sendVoiceNote(numericId, text);
+      if (mode === 'voice') return; // skip text
     }
 
-    // Text output (default)
+    // Text output (text or both)
     try {
       const MAX_LENGTH = 4096;
       if (text.length <= MAX_LENGTH) {
