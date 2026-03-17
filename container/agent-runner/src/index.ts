@@ -407,7 +407,7 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -423,6 +423,49 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        // ── Standard MCP servers (run inside container via npx) ──────────────
+        'sequential-thinking': {
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-sequential-thinking'],
+        },
+        memory: {
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-memory'],
+        },
+        'brave-search': {
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-brave-search'],
+          env: {
+            BRAVE_API_KEY: process.env.BRAVE_SEARCH_API_KEY || process.env.BRAVE_API_KEY || '',
+          },
+        },
+        context7: {
+          command: 'npx',
+          args: [
+            '-y', '@upstash/context7-mcp',
+            ...(process.env.CONTEXT7_TOKEN ? ['--api-key', process.env.CONTEXT7_TOKEN] : []),
+          ],
+        },
+        git: {
+          command: 'npx',
+          args: ['-y', '@cyanheads/git-mcp-server'],
+          env: { MCP_LOG_LEVEL: 'error', GIT_SIGN_COMMITS: 'false' },
+        },
+        filesystem: {
+          command: 'npx',
+          args: [
+            '-y', '@modelcontextprotocol/server-filesystem',
+            '/workspace/group',
+            '/workspace/extra',
+          ],
+        },
+        ...(process.env.HOSTINGER_API_KEY ? {
+          hostinger: {
+            command: 'npx',
+            args: ['-y', 'hostinger-api-mcp@latest'],
+            env: { API_TOKEN: process.env.HOSTINGER_API_KEY },
+          },
+        } : {}),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
