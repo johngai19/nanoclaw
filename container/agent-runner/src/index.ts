@@ -466,6 +466,31 @@ async function runQuery(
             env: { API_TOKEN: process.env.HOSTINGER_API_KEY },
           },
         } : {}),
+        // ── Database MCP servers (connect to host Docker via host.docker.internal) ──
+        'postgres': {
+          command: 'npx',
+          args: [
+            '-y', '@bytebase/dbhub',
+            '--transport', 'stdio',
+            '--dsn', 'postgresql://mcp_user:mcp_password@host.docker.internal:5432/mcp_db',
+          ],
+        },
+        'mongodb': {
+          command: 'npx',
+          args: ['-y', 'mongodb-mcp-server@0.3.0', '--readOnly'],
+          env: {
+            MDB_MCP_CONNECTION_STRING:
+              'mongodb://mcp_user:mcp_password@host.docker.internal:27017/mcp_test?authSource=admin',
+          },
+        },
+        // ── Supabase MCP ──────────────────────────────────────────────────────
+        ...(process.env.SUPABASE_ACCESS_TOKEN ? {
+          supabase: {
+            command: 'npx',
+            args: ['-y', '@supabase/mcp-server-supabase@latest'],
+            env: { SUPABASE_ACCESS_TOKEN: process.env.SUPABASE_ACCESS_TOKEN },
+          },
+        } : {}),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
