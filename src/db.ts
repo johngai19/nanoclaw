@@ -76,7 +76,7 @@ function createSchema(database: Database.Database): void {
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      folder TEXT NOT NULL UNIQUE,
+      folder TEXT NOT NULL,
       trigger_pattern TEXT NOT NULL,
       added_at TEXT NOT NULL,
       container_config TEXT,
@@ -104,6 +104,34 @@ function createSchema(database: Database.Database): void {
       .run(`${ASSISTANT_NAME}:%`);
   } catch {
     /* column already exists */
+  }
+
+  // Remove UNIQUE constraint from folder to allow multiple JIDs → same folder
+  try {
+    const schema = (
+      database
+        .prepare(`SELECT sql FROM sqlite_master WHERE name='registered_groups'`)
+        .get() as { sql: string } | undefined
+    )?.sql;
+    if (schema && schema.includes('UNIQUE')) {
+      database.exec(`
+        ALTER TABLE registered_groups RENAME TO registered_groups_old;
+        CREATE TABLE registered_groups (
+          jid TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          folder TEXT NOT NULL,
+          trigger_pattern TEXT NOT NULL,
+          added_at TEXT NOT NULL,
+          container_config TEXT,
+          requires_trigger INTEGER DEFAULT 1,
+          is_main INTEGER DEFAULT 0
+        );
+        INSERT INTO registered_groups SELECT * FROM registered_groups_old;
+        DROP TABLE registered_groups_old;
+      `);
+    }
+  } catch {
+    /* migration already applied or not needed */
   }
 
   // Add is_main column if it doesn't exist (migration for existing DBs)
