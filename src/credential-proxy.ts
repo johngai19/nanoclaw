@@ -59,6 +59,22 @@ export interface ProxyConfig {
   authMode: AuthMode;
 }
 
+/**
+ * Keys from data/env/env that containers are allowed to request via /secret.
+ * Anthropic auth keys are excluded — containers get those injected automatically.
+ */
+const ALLOWED_SECRET_KEYS = new Set([
+  'OPENAI_API_KEY',
+  'GITHUB_TOKEN',
+  'BRAVE_SEARCH_API_KEY',
+  'TELEGRAM_BOT_TOKEN',
+  'SLACK_BOT_TOKEN',
+  'DISCORD_BOT_TOKEN',
+  'GMAIL_CLIENT_ID',
+  'GMAIL_CLIENT_SECRET',
+  'GMAIL_REFRESH_TOKEN',
+]);
+
 export function startCredentialProxy(
   port: number,
   host = '127.0.0.1',
@@ -103,6 +119,29 @@ export function startCredentialProxy(
             res.writeHead(500);
             res.end(`Error: ${err.message}`);
           });
+        return;
+      }
+
+      // Named secret retrieval from data/env/env
+      // Usage: GET /secret?key=OPENAI_API_KEY
+      if (req.url?.startsWith('/secret')) {
+        const url = new URL(req.url, 'http://localhost');
+        const key = url.searchParams.get('key');
+        if (!key || !ALLOWED_SECRET_KEYS.has(key)) {
+          res.writeHead(403);
+          res.end(`Forbidden: key not in allowlist`);
+          return;
+        }
+        const envSecrets = readEnvFile([key]);
+        const value = envSecrets[key] || process.env[key] || '';
+        if (!value) {
+          res.writeHead(404);
+          res.end(`Not found: ${key} not set`);
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end(value);
+        logger.info({ key }, 'Secret served to container');
         return;
       }
 

@@ -26,6 +26,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -236,6 +237,20 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Inject common API keys from data/env/env so agents can use them
+  // transparently (e.g. OPENAI_API_KEY, GITHUB_TOKEN, BRAVE_SEARCH_API_KEY).
+  // Anthropic auth keys are excluded — handled by the proxy above.
+  const INJECTED_KEYS = [
+    'OPENAI_API_KEY',
+    'GITHUB_TOKEN',
+    'BRAVE_SEARCH_API_KEY',
+  ];
+  const injectedEnv = readEnvFile(INJECTED_KEYS);
+  for (const key of INJECTED_KEYS) {
+    const val = injectedEnv[key] || process.env[key];
+    if (val) args.push('-e', `${key}=${val}`);
   }
 
   // Runtime-specific args for host gateway resolution
