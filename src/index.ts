@@ -635,6 +635,20 @@ async function main(): Promise<void> {
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
+
+  // Notify main groups that NanoClaw has started (surfaces restarts and crash-recoveries)
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    if (!group.isMain) continue;
+    const channel = findChannel(channels, jid);
+    if (channel) {
+      channel
+        .sendMessage(jid, '✅ NanoClaw 已启动并就绪')
+        .catch((err) =>
+          logger.warn({ err }, 'Failed to send startup notification'),
+        );
+    }
+  }
+
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);
