@@ -245,7 +245,16 @@ function buildContainerArgs(
   const INJECTED_KEYS = [
     'OPENAI_API_KEY',
     'GITHUB_TOKEN',
-    'BRAVE_SEARCH_API_KEY',
+    'BRAVE_BASE_URL',
+    'AZURE_OPENAI_URL',
+    'AZURE_OPENAI_API_KEY',
+    'AZURE_OPENAI_URL_2',
+    'AZURE_OPENAI_API_KEY_2',
+    'OPENROUTER_API_URL',
+    'OPENROUTER_API_KEY',
+    'SILICONFLOW_BASE_URL',
+    'SILICONFLOW_API_KEY',
+    'CONTEXT7_TOKEN',
   ];
   const injectedEnv = readEnvFile(INJECTED_KEYS);
   for (const key of INJECTED_KEYS) {
