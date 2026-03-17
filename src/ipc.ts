@@ -1,9 +1,10 @@
+import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { DATA_DIR, GROUPS_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -171,6 +172,9 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For host_exec
+    command?: string;
+    resultPath?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -446,6 +450,44 @@ export async function processTaskIpc(
           { data },
           'Invalid register_group request - missing required fields',
         );
+      }
+      break;
+
+    case 'host_exec':
+      // Execute a shell command on the host Mac and write result back to the
+      // group's workspace so the container agent can read it.
+      // Only the main group may send host_exec commands.
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized host_exec attempt blocked');
+        break;
+      }
+      if (!data.command) {
+        logger.warn({ data }, 'host_exec missing command');
+        break;
+      }
+      {
+        const resultPath = data.resultPath || `host-exec-${Date.now()}.txt`;
+        const resultDir = path.join(GROUPS_DIR, sourceGroup, 'host-exec');
+        const resultFile = path.join(resultDir, path.basename(resultPath));
+        fs.mkdirSync(resultDir, { recursive: true });
+
+        logger.info(
+          { sourceGroup, command: data.command },
+          'Executing host command',
+        );
+        exec(data.command, { timeout: 30000 }, (err, stdout, stderr) => {
+          const output = JSON.stringify({
+            stdout: stdout || '',
+            stderr: stderr || '',
+            exitCode: err?.code ?? 0,
+            error: err ? err.message : null,
+          });
+          fs.writeFileSync(resultFile, output);
+          logger.info(
+            { sourceGroup, resultFile, exitCode: err?.code ?? 0 },
+            'host_exec result written',
+          );
+        });
       }
       break;
 

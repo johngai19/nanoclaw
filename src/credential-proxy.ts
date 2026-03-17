@@ -10,12 +10,48 @@
  *             Proxy injects real OAuth token on that exchange request;
  *             subsequent requests carry the temp key which is valid as-is.
  */
+import { execFile } from 'child_process';
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+
+/**
+ * Read a secret from 1Password via the `op` CLI.
+ * ref format: op://vault/item/field
+ */
+function readOpSecret(ref: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // Search for `op` in common install locations
+    const opPaths = [
+      '/opt/homebrew/bin/op',
+      '/usr/local/bin/op',
+      '/usr/bin/op',
+      'op',
+    ];
+    const tryNext = (i: number) => {
+      if (i >= opPaths.length) {
+        reject(new Error('op CLI not found'));
+        return;
+      }
+      execFile(
+        opPaths[i],
+        ['read', '--no-newline', ref],
+        (err, stdout, stderr) => {
+          if (err) {
+            if (i < opPaths.length - 1) tryNext(i + 1);
+            else reject(new Error(stderr || err.message));
+          } else {
+            resolve(stdout);
+          }
+        },
+      );
+    };
+    tryNext(0);
+  });
+}
 
 export type AuthMode = 'api-key' | 'oauth';
 
@@ -46,6 +82,30 @@ export function startCredentialProxy(
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
+      // 1Password secret retrieval endpoint
+      // Usage: GET /op-read?ref=op://vault/item/field
+      if (req.url?.startsWith('/op-read')) {
+        const url = new URL(req.url, 'http://localhost');
+        const ref = url.searchParams.get('ref');
+        if (!ref || !ref.startsWith('op://')) {
+          res.writeHead(400);
+          res.end('Bad Request: ref must start with op://');
+          return;
+        }
+        readOpSecret(ref)
+          .then((value) => {
+            res.writeHead(200, { 'Content-Type': 'text/plain' });
+            res.end(value);
+            logger.info({ ref }, '1Password secret served');
+          })
+          .catch((err) => {
+            logger.error({ ref, err }, '1Password read failed');
+            res.writeHead(500);
+            res.end(`Error: ${err.message}`);
+          });
+        return;
+      }
+
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
