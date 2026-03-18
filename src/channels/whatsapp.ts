@@ -2,10 +2,13 @@ import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+import https from 'https';
+
 import makeWASocket, {
   Browsers,
   DisconnectReason,
   WASocket,
+  downloadMediaMessage,
   fetchLatestWaWebVersion,
   makeCacheableSignalKeyStore,
   normalizeMessageContent,
@@ -31,6 +34,94 @@ import {
 import { registerChannel, ChannelOpts } from './registry.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/** Transcribe audio buffer via OpenAI gpt-4o-transcribe */
+async function transcribeAudioWA(
+  apiKey: string,
+  audioBuffer: Buffer,
+): Promise<string> {
+  const boundary = `----Boundary${Math.random().toString(36).slice(2)}`;
+  const CRLF = '\r\n';
+  const body = Buffer.concat([
+    Buffer.from(
+      `--${boundary}${CRLF}Content-Disposition: form-data; name="model"${CRLF}${CRLF}gpt-4o-transcribe${CRLF}` +
+        `--${boundary}${CRLF}Content-Disposition: form-data; name="file"; filename="audio.ogg"${CRLF}Content-Type: audio/ogg${CRLF}${CRLF}`,
+    ),
+    audioBuffer,
+    Buffer.from(`${CRLF}--${boundary}--${CRLF}`),
+  ]);
+  return new Promise<string>((resolve) => {
+    const req = https.request(
+      {
+        hostname: 'api.openai.com',
+        path: '/v1/audio/transcriptions',
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': body.length,
+        },
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (c: Buffer) => { data += c.toString(); });
+        res.on('end', () => {
+          try {
+            const r = JSON.parse(data) as { text?: string };
+            resolve(r.text ?? '[语音转录失败]');
+          } catch { resolve('[语音转录解析错误]'); }
+        });
+      },
+    );
+    req.on('error', () => resolve('[转录请求失败]'));
+    req.write(body);
+    req.end();
+  });
+}
+
+/** Describe image via OpenAI GPT-4o Vision */
+async function describeImageWA(
+  apiKey: string,
+  imageBuffer: Buffer,
+): Promise<string> {
+  const base64 = imageBuffer.toString('base64');
+  const body = JSON.stringify({
+    model: 'gpt-4o',
+    messages: [{ role: 'user', content: [
+      { type: 'text', text: '请简洁描述这张图片的内容（中文，≤100字）。若是截图/代码/文档，重点描述文字内容。' },
+      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'auto' } },
+    ]}],
+    max_tokens: 300,
+  });
+  return new Promise<string>((resolve) => {
+    const req = https.request(
+      {
+        hostname: 'api.openai.com',
+        path: '/v1/chat/completions',
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (c: Buffer) => { data += c.toString(); });
+        res.on('end', () => {
+          try {
+            const r = JSON.parse(data) as { choices?: Array<{ message: { content: string } }> };
+            const content = r.choices?.[0]?.message?.content;
+            resolve(content ? `[图片: ${content}]` : '[图片描述失败]');
+          } catch { resolve('[图片描述解析错误]'); }
+        });
+      },
+    );
+    req.on('error', () => resolve('[图片请求失败]'));
+    req.write(body);
+    req.end();
+  });
+}
 
 export interface WhatsAppChannelOpts {
   onMessage: OnInboundMessage;
@@ -208,12 +299,50 @@ export class WhatsAppChannel implements Channel {
           // Only deliver full message for registered groups
           const groups = this.opts.registeredGroups();
           if (groups[chatJid]) {
-            const content =
+            let content =
               normalized.conversation ||
               normalized.extendedTextMessage?.text ||
               normalized.imageMessage?.caption ||
               normalized.videoMessage?.caption ||
               '';
+
+            // ── Voice / audio message → transcribe ───────────────────────
+            const isAudio = !!(normalized.audioMessage || (normalized as any).pttMessage);
+            if (!content && isAudio) {
+              const envVars = readEnvFile(['OPENAI_API_KEY']);
+              const apiKey = envVars.OPENAI_API_KEY || '';
+              if (apiKey) {
+                try {
+                  const buf = await downloadMediaMessage(msg, 'buffer', {}) as Buffer;
+                  const transcript = await transcribeAudioWA(apiKey, buf);
+                  content = `[Voice transcript: ${transcript}]`;
+                  logger.info({ chatJid, chars: transcript.length }, 'WA voice transcribed');
+                } catch (err) {
+                  logger.error({ err }, 'WA voice transcription failed');
+                  content = '[Voice message — transcription error]';
+                }
+              } else {
+                content = '[Voice message — OPENAI_API_KEY not set]';
+              }
+            }
+
+            // ── Image message → describe ──────────────────────────────────
+            if (!content && normalized.imageMessage) {
+              const envVars = readEnvFile(['OPENAI_API_KEY']);
+              const apiKey = envVars.OPENAI_API_KEY || '';
+              if (apiKey) {
+                try {
+                  const buf = await downloadMediaMessage(msg, 'buffer', {}) as Buffer;
+                  content = await describeImageWA(apiKey, buf);
+                  logger.info({ chatJid }, 'WA image described');
+                } catch (err) {
+                  logger.error({ err }, 'WA image vision failed');
+                  content = '[Photo — vision error]';
+                }
+              } else {
+                content = '[Photo — OPENAI_API_KEY not set]';
+              }
+            }
 
             // Skip protocol messages with no text content (encryption keys, read receipts, etc.)
             if (!content) continue;
