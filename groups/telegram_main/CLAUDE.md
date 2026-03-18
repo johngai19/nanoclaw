@@ -4,13 +4,39 @@
 - **职位**：Senior DevOps / AI Engineer，OKX / OKEngine，香港
 - **偏好**：简洁直接，不要时间估算，中文为主，Agent 自动整理
 
-## Obsidian Vault
+## 挂载目录
 
-- **Host Path**: `/Users/weizy0219/Documents/Obsidian Vault/MainVault`
-- **Container Path**: `/workspace/extra/obsidian/`（只读挂载，containerPath = "obsidian"）
-- **结构**：PARA + Tag + 四层记忆（v3.1.0）
-- **协议**：每次对话须读取 CLAUDE.md → MANIFEST.md → L1-core.md → L2-working.md
-- **原始提示词保存路径**：`Inbox/原始提示词/`（需读写权限）
+| 容器路径 | 宿主机路径 | 权限 | 说明 |
+|---------|-----------|------|------|
+| `/workspace/extra/obsidian/` | `/Users/weizy0219/Documents/Obsidian Vault/MainVault` | 读写 | 知识库 |
+| `/workspace/extra/repos/` | `/Users/weizy0219/repos` | 读写 | 代码仓库 |
+| `/workspace/group/` | `groups/telegram_main/` | 读写 | 工作目录（含 blog_backup/） |
+
+**Obsidian 协议**：每次对话须读取 CLAUDE.md → MANIFEST.md → L1-core.md → L2-working.md
+**原始提示词保存路径**：`/workspace/extra/obsidian/Inbox/原始提示词/`
+
+## Mac 远程控制（host_exec）
+
+此频道是主控频道（isMain=true），可以通过 IPC 在宿主机 Mac 上执行命令：
+
+```json
+// 写入文件：/workspace/ipc/tasks/{timestamp}.json
+{
+  "type": "host_exec",
+  "command": "osascript -e 'tell app \"Finder\" to ...'",
+  "resultPath": "result.txt"
+}
+```
+
+结果写回 `/workspace/group/host-exec/{resultPath}`，可以读取。
+
+**可用能力**：
+- `osascript` — 控制 Mac 应用（Finder、Safari、系统设置等）
+- `open` — 打开应用/文件/URL
+- `bash` — 执行任何 shell 命令
+- `ssh` — 连接局域网 Windows 机器（192.168.3.63，用户 wei.zy@outlook.com）
+
+**安全**：仅主控频道可用，wife 频道不可用。
 
 ## 消息格式说明
 
@@ -23,11 +49,6 @@
 | `[Document: <filename>]` | 文件消息 | 文件名占位符 |
 
 收到 `[Voice: ...]` 时，当作用户正常说的话回复，**不要**提示用户"这是手动发的文字"。
-
-## Obsidian Vault
-
-- **Container Path**: `/workspace/extra/obsidian/`（读写挂载）
-- **结构**：PARA + Tag + 四层记忆（v3.1.0）
 
 ## 语音输入输出
 

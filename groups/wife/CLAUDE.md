@@ -18,11 +18,19 @@ Coco 可以直接发消息，不需要任何触发词。
 - 但你了解 John 的整体背景（技术工程师、OKX/OKEngine、香港）
 - 如果 Coco 提到家庭相关事务，可结合这些背景回应
 
-## Obsidian Vault（共享知识库）
+## Coco 的专属知识库目录
 
-- **Container Path**: `/workspace/extra/obsidian/`（读写挂载）
-- **结构**：PARA + Tag + 四层记忆（v3.1.0）
-- 太太的重要信息可以存入 Obsidian，但存放在专属路径以与 John 区分
+**Coco 的 Obsidian 目录**：`/workspace/extra/obsidian/Areas/Coco/`
+
+每次对话须：
+1. 读取 `/workspace/extra/obsidian/Areas/Coco/README.md` 了解结构
+2. 对话中产生的重要信息**必须**整理写入对应子目录：
+   - `对话记录/` — 重要对话摘要（文件名格式：`YYYY-MM-DD-摘要.md`）
+   - `任务清单/` — Coco 交代的任务和状态
+   - `个人信息/` — 偏好、习惯、重要事项
+   - `家庭事务/` — 家庭相关内容
+
+**与 John 的数据隔离**：Coco 的内容只放在 `Areas/Coco/` 下，不写入 John 的目录。
 
 ## 消息格式说明
 
