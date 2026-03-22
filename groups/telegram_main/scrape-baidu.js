@@ -61,46 +61,67 @@ function slugify(s) {
 
 async function scrapeArticle(page, url, title) {
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
     await page.waitForTimeout(2000);
 
-    const data = await page.evaluate(() => {
-      // Baidu article content selectors
-      const el = document.querySelector('.article-content') ||
-                 document.querySelector('.article_main') ||
-                 document.querySelector('[class*="article"]') ||
-                 document.querySelector('.content') ||
-                 document.querySelector('article');
+    // Baidu wenzhang.baidu.com loads article content in an iframe from wenzhang.bdstatic.com
+    // We must switch to the iframe to read the actual article text.
+    let contentFrame = null;
+    const frames = page.frames();
+    for (const f of frames) {
+      if (f.url().includes('bdstatic.com/page/content')) {
+        contentFrame = f;
+        break;
+      }
+    }
 
-      if (!el) return { md: document.body.innerText?.trim() || '', imgs: [], date: '' };
+    let data;
+    const extractContent = () => {
+      const body = document.body;
+      if (!body) return { md: '', imgs: [], date: '' };
 
       const imgs = [];
-      document.querySelectorAll('img').forEach(img => {
+      body.querySelectorAll('img').forEach(img => {
         const src = img.getAttribute('data-src') || img.getAttribute('src') || '';
-        if (src && !src.startsWith('data:') && !src.includes('static') && !src.includes('logo')) {
+        if (src && !src.startsWith('data:') && !src.includes('static') && !src.includes('logo') && !src.includes('icon')) {
           imgs.push(src);
         }
       });
 
-      // Get date
-      const dateEl = document.querySelector('time') ||
-                     document.querySelector('[class*="date"]') ||
-                     document.querySelector('.article-time') ||
-                     document.querySelector('.time');
-      const date = dateEl ? dateEl.textContent?.trim() || '' : '';
-
-      const md = el.innerHTML
+      const md = body.innerHTML
         .replace(/<h([1-4])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, l, t) => '\n' + '#'.repeat(+l+1) + ' ' + t.replace(/<[^>]+>/g,'').trim() + '\n')
         .replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, (_, t) => '\n' + t.replace(/<[^>]+>/g,'').trim() + '\n')
         .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_, t) => '- ' + t.replace(/<[^>]+>/g,'').trim() + '\n')
         .replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g,'')
-        .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&nbsp;/g,' ')
+        .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&nbsp;/g,' ').replace(/\u00a0/g,' ')
         .replace(/\n{3,}/g, '\n\n').trim();
 
-      return { md, imgs, date };
-    });
+      return { md, imgs, date: '' };
+    };
 
-    if (!data.md) return null;
+    if (contentFrame) {
+      try {
+        await contentFrame.waitForLoadState('domcontentloaded');
+        await contentFrame.waitForTimeout(1000);
+        data = await contentFrame.evaluate(extractContent);
+      } catch {
+        data = { md: '', imgs: [], date: '' };
+      }
+    }
+
+    // Fallback: try main page if iframe failed
+    if (!data || !data.md || data.md.length < 20) {
+      data = await page.evaluate(extractContent);
+    }
+
+    // Get date from main page
+    const date = await page.evaluate(() => {
+      const el = document.querySelector('time') || document.querySelector('[class*="date"]') || document.querySelector('.time');
+      return el ? el.textContent?.trim() || '' : '';
+    });
+    if (date) data.date = date;
+
+    if (!data.md || data.md.length < 10) return null;
 
     const slug = slugify(title);
     const imgDir = path.join(IMAGES_DIR, slug);
@@ -151,9 +172,9 @@ async function main() {
   console.log('Title:', await page.title());
   console.log('URL:', page.url());
 
-  // Scroll to load all articles
+  // Scroll to load all articles (more iterations to find all)
   process.stdout.write('Scrolling');
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 60; i++) {
     const prev = await page.evaluate(() => document.body.scrollHeight);
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(1500);
@@ -196,15 +217,32 @@ async function main() {
 
   fs.writeFileSync(path.join(OUTPUT_DIR, 'article-list.json'), JSON.stringify(deduped, null, 2));
 
-  let ok = 0, fail = 0;
+  // Check existing files — re-scrape if content is too small (< 500 bytes = empty shell)
+  const existingFiles = new Map();
+  for (const f of fs.readdirSync(OUTPUT_DIR).filter(f => f.endsWith('.md'))) {
+    const size = fs.statSync(path.join(OUTPUT_DIR, f)).size;
+    // Extract title from frontmatter
+    const content = fs.readFileSync(path.join(OUTPUT_DIR, f), 'utf-8');
+    const titleMatch = content.match(/^title:\s*"(.+?)"/m);
+    if (titleMatch) existingFiles.set(titleMatch[1], { file: f, size });
+  }
+  const MIN_SIZE = 500; // bytes — below this is an empty shell
+
+  let ok = 0, fail = 0, skipped = 0;
   for (let i = 0; i < deduped.length; i++) {
     const { url, title } = deduped[i];
-    process.stdout.write(`[${i+1}/${deduped.length}] ${title.slice(0,45).padEnd(45)} `);
+    const existing = existingFiles.get(title);
+    if (existing && existing.size >= MIN_SIZE) {
+      skipped++;
+      continue; // Already has real content
+    }
+    process.stdout.write(`[${i+1}/${deduped.length}] ${existing ? '🔄' : '🆕'} ${title.slice(0,43).padEnd(43)} `);
     const r = await scrapeArticle(page, url, title);
     if (r) { console.log(`✓ ${r.date} (${r.imgSaved} imgs)`); ok++; }
     else { console.log('✗'); fail++; }
     await page.waitForTimeout(800);
   }
+  console.log(`\nSkipped ${skipped} articles with existing content`);
 
   console.log(`\n✅ Baidu done: ${ok} saved, ${fail} failed`);
   console.log(`📁 ${OUTPUT_DIR}`);

@@ -64,12 +64,16 @@ async function transcribeAudioWA(
       },
       (res) => {
         let data = '';
-        res.on('data', (c: Buffer) => { data += c.toString(); });
+        res.on('data', (c: Buffer) => {
+          data += c.toString();
+        });
         res.on('end', () => {
           try {
             const r = JSON.parse(data) as { text?: string };
             resolve(r.text ?? '[语音转录失败]');
-          } catch { resolve('[语音转录解析错误]'); }
+          } catch {
+            resolve('[语音转录解析错误]');
+          }
         });
       },
     );
@@ -87,10 +91,24 @@ async function describeImageWA(
   const base64 = imageBuffer.toString('base64');
   const body = JSON.stringify({
     model: 'gpt-4o',
-    messages: [{ role: 'user', content: [
-      { type: 'text', text: '请简洁描述这张图片的内容（中文，≤100字）。若是截图/代码/文档，重点描述文字内容。' },
-      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'auto' } },
-    ]}],
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: '请简洁描述这张图片的内容（中文，≤100字）。若是截图/代码/文档，重点描述文字内容。',
+          },
+          {
+            type: 'image_url',
+            image_url: {
+              url: `data:image/jpeg;base64,${base64}`,
+              detail: 'auto',
+            },
+          },
+        ],
+      },
+    ],
     max_tokens: 300,
   });
   return new Promise<string>((resolve) => {
@@ -107,13 +125,19 @@ async function describeImageWA(
       },
       (res) => {
         let data = '';
-        res.on('data', (c: Buffer) => { data += c.toString(); });
+        res.on('data', (c: Buffer) => {
+          data += c.toString();
+        });
         res.on('end', () => {
           try {
-            const r = JSON.parse(data) as { choices?: Array<{ message: { content: string } }> };
+            const r = JSON.parse(data) as {
+              choices?: Array<{ message: { content: string } }>;
+            };
             const content = r.choices?.[0]?.message?.content;
             resolve(content ? `[图片: ${content}]` : '[图片描述失败]');
-          } catch { resolve('[图片描述解析错误]'); }
+          } catch {
+            resolve('[图片描述解析错误]');
+          }
         });
       },
     );
@@ -307,16 +331,25 @@ export class WhatsAppChannel implements Channel {
               '';
 
             // ── Voice / audio message → transcribe ───────────────────────
-            const isAudio = !!(normalized.audioMessage || (normalized as any).pttMessage);
+            const isAudio = !!(
+              normalized.audioMessage || (normalized as any).pttMessage
+            );
             if (!content && isAudio) {
               const envVars = readEnvFile(['OPENAI_API_KEY']);
               const apiKey = envVars.OPENAI_API_KEY || '';
               if (apiKey) {
                 try {
-                  const buf = await downloadMediaMessage(msg, 'buffer', {}) as Buffer;
+                  const buf = (await downloadMediaMessage(
+                    msg,
+                    'buffer',
+                    {},
+                  )) as Buffer;
                   const transcript = await transcribeAudioWA(apiKey, buf);
                   content = `[Voice transcript: ${transcript}]`;
-                  logger.info({ chatJid, chars: transcript.length }, 'WA voice transcribed');
+                  logger.info(
+                    { chatJid, chars: transcript.length },
+                    'WA voice transcribed',
+                  );
                 } catch (err) {
                   logger.error({ err }, 'WA voice transcription failed');
                   content = '[Voice message — transcription error]';
@@ -332,7 +365,11 @@ export class WhatsAppChannel implements Channel {
               const apiKey = envVars.OPENAI_API_KEY || '';
               if (apiKey) {
                 try {
-                  const buf = await downloadMediaMessage(msg, 'buffer', {}) as Buffer;
+                  const buf = (await downloadMediaMessage(
+                    msg,
+                    'buffer',
+                    {},
+                  )) as Buffer;
                   content = await describeImageWA(apiKey, buf);
                   logger.info({ chatJid }, 'WA image described');
                 } catch (err) {

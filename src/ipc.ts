@@ -175,6 +175,7 @@ export async function processTaskIpc(
     // For host_exec
     command?: string;
     resultPath?: string;
+    timeout?: number;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -475,7 +476,8 @@ export async function processTaskIpc(
           { sourceGroup, command: data.command },
           'Executing host command',
         );
-        exec(data.command, { timeout: 30000 }, (err, stdout, stderr) => {
+        const timeout = Math.min(data.timeout || 30000, 300000); // max 5 min, default 30s
+        exec(data.command, { timeout, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
           const output = JSON.stringify({
             stdout: stdout || '',
             stderr: stderr || '',

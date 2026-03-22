@@ -579,6 +579,9 @@ async function main(): Promise<void> {
   // Create and connect all registered channels.
   // Each channel self-registers via the barrel import above.
   // Factories return null when credentials are missing, so unconfigured channels are skipped.
+  // Channels connect in parallel so a slow/failing channel doesn't block others.
+  const CHANNEL_CONNECT_TIMEOUT = 30_000; // 30s per channel
+  const pendingChannels: { name: string; channel: Channel }[] = [];
   for (const channelName of getRegisteredChannelNames()) {
     const factory = getChannelFactory(channelName)!;
     const channel = factory(channelOpts);
@@ -589,9 +592,27 @@ async function main(): Promise<void> {
       );
       continue;
     }
-    channels.push(channel);
-    await channel.connect();
+    pendingChannels.push({ name: channelName, channel });
   }
+
+  const connectResults = await Promise.allSettled(
+    pendingChannels.map(async ({ name, channel }) => {
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Channel ${name} connect timed out after ${CHANNEL_CONNECT_TIMEOUT}ms`)), CHANNEL_CONNECT_TIMEOUT),
+      );
+      await Promise.race([channel.connect(), timeout]);
+      return { name, channel };
+    }),
+  );
+
+  for (const result of connectResults) {
+    if (result.status === 'fulfilled') {
+      channels.push(result.value.channel);
+    } else {
+      logger.error({ err: result.reason }, 'Channel failed to connect, continuing without it');
+    }
+  }
+
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);

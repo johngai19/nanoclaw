@@ -23,20 +23,40 @@
 // 写入文件：/workspace/ipc/tasks/{timestamp}.json
 {
   "type": "host_exec",
-  "command": "osascript -e 'tell app \"Finder\" to ...'",
-  "resultPath": "result.txt"
+  "command": "任何 shell 命令",
+  "resultPath": "result.txt",
+  "timeout": 300000
 }
 ```
 
-结果写回 `/workspace/group/host-exec/{resultPath}`，可以读取。
+结果写回 `/workspace/group/host-exec/{resultPath}`，JSON 格式包含 stdout/stderr/exitCode。
 
 **可用能力**：
+- `bash` — 执行任何 shell 命令（git, npm, python3, curl, docker 等）
 - `osascript` — 控制 Mac 应用（Finder、Safari、系统设置等）
 - `open` — 打开应用/文件/URL
-- `bash` — 执行任何 shell 命令
 - `ssh` — 连接局域网 Windows 机器（192.168.3.63，用户 wei.zy@outlook.com）
+- `launchctl` — 管理 macOS 服务（包括重启 NanoClaw 自身）
+- Node.js 路径：`$HOME/.nvm/versions/node/v22.2.0/bin/node`
 
+**超时**：默认 30 秒，可通过 `timeout` 字段设置（最大 300 秒/5 分钟）。
+**缓冲**：最大输出 10MB。
 **安全**：仅主控频道可用，wife 频道不可用。
+
+**常用命令示例**：
+```bash
+# Git 操作
+cd /Users/weizy0219/repos/johngai-blog && git add -A && git commit -m "msg" && git push
+
+# 重启 NanoClaw
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+
+# 运行 Node 脚本
+export PATH=$HOME/.nvm/versions/node/v22.2.0/bin:$PATH && node script.js
+
+# 查看日志
+tail -20 /Users/weizy0219/Documents/repos/nanoclaw/logs/nanoclaw.log
+```
 
 ## 消息格式说明
 

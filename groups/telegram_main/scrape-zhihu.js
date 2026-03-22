@@ -151,15 +151,27 @@ async function main() {
   await page.goto(PROFILE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(3000);
 
-  // Scroll
+  // Scroll — keep scrolling even if scrollHeight doesn't change (virtual list)
   process.stdout.write('Scrolling');
-  for (let i = 0; i < 25; i++) {
-    const prev = await page.evaluate(() => document.body.scrollHeight);
+  let noChangeCount = 0;
+  for (let i = 0; i < 200; i++) {
+    const prevCount = await page.evaluate(() => document.querySelectorAll('.ContentItem-title a, a[href*="zhuanlan.zhihu.com/p/"]').length);
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await page.waitForTimeout(1200);
-    const curr = await page.evaluate(() => document.body.scrollHeight);
+    await page.waitForTimeout(1500);
+    // Try clicking "load more" if it exists
+    try {
+      const btn = await page.$('button:has-text("加载更多"), .LoadMore, [class*="loadMore"]');
+      if (btn) await btn.click();
+    } catch {}
+    const currCount = await page.evaluate(() => document.querySelectorAll('.ContentItem-title a, a[href*="zhuanlan.zhihu.com/p/"]').length);
     process.stdout.write('.');
-    if (curr === prev) break;
+    if (currCount === prevCount) {
+      noChangeCount++;
+      if (noChangeCount >= 5) break; // 5 consecutive no-change = done
+    } else {
+      noChangeCount = 0;
+    }
+    if (i % 20 === 0 && i > 0) process.stdout.write(`(${currCount})`);
   }
   console.log();
 
@@ -196,12 +208,22 @@ async function main() {
   }
 
   fs.writeFileSync(path.join(OUTPUT_DIR, 'article-list.json'), JSON.stringify(articles, null, 2));
-  console.log('Article list saved\n');
+  console.log('Article list saved');
+
+  // Skip already scraped articles (by URL match)
+  const existingUrls = new Set();
+  for (const f of fs.readdirSync(OUTPUT_DIR).filter(f => f.endsWith('.md'))) {
+    const content = fs.readFileSync(path.join(OUTPUT_DIR, f), 'utf-8');
+    const urlMatch = content.match(/^url:\s*"(.+?)"/m);
+    if (urlMatch) existingUrls.add(urlMatch[1]);
+  }
+  const toScrape = articles.filter(a => !existingUrls.has(a.url));
+  console.log(`${toScrape.length} new, ${articles.length - toScrape.length} already scraped\n`);
 
   let ok = 0, fail = 0;
-  for (let i = 0; i < articles.length; i++) {
-    const { url, title } = articles[i];
-    process.stdout.write(`[${i+1}/${articles.length}] ${title.slice(0,45).padEnd(45)} `);
+  for (let i = 0; i < toScrape.length; i++) {
+    const { url, title } = toScrape[i];
+    process.stdout.write(`[${i+1}/${toScrape.length}] ${title.slice(0,45).padEnd(45)} `);
     const r = await scrapeArticle(page, url, title);
     if (r) { console.log(`✓ ${r.date} (${r.imgSaved} imgs)`); ok++; }
     else { console.log('✗'); fail++; }
