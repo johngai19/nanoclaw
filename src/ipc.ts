@@ -477,19 +477,23 @@ export async function processTaskIpc(
           'Executing host command',
         );
         const timeout = Math.min(data.timeout || 30000, 300000); // max 5 min, default 30s
-        exec(data.command, { timeout, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-          const output = JSON.stringify({
-            stdout: stdout || '',
-            stderr: stderr || '',
-            exitCode: err?.code ?? 0,
-            error: err ? err.message : null,
-          });
-          fs.writeFileSync(resultFile, output);
-          logger.info(
-            { sourceGroup, resultFile, exitCode: err?.code ?? 0 },
-            'host_exec result written',
-          );
-        });
+        exec(
+          data.command,
+          { timeout, maxBuffer: 10 * 1024 * 1024 },
+          (err, stdout, stderr) => {
+            const output = JSON.stringify({
+              stdout: stdout || '',
+              stderr: stderr || '',
+              exitCode: err?.code ?? 0,
+              error: err ? err.message : null,
+            });
+            fs.writeFileSync(resultFile, output);
+            logger.info(
+              { sourceGroup, resultFile, exitCode: err?.code ?? 0 },
+              'host_exec result written',
+            );
+          },
+        );
       }
       break;
 

@@ -10,7 +10,7 @@
  *             Proxy injects real OAuth token on that exchange request;
  *             subsequent requests carry the temp key which is valid as-is.
  */
-import { execFile } from 'child_process';
+import { execFile, execSync } from 'child_process';
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
@@ -104,6 +104,27 @@ const ALLOWED_SECRET_KEYS = new Set([
   'DISCORD_BOT_TOKEN',
 ]);
 
+/** Try to read a fresh OAuth token from macOS Keychain (Claude Code stores it there). */
+function readKeychainToken(): string | null {
+  try {
+    const raw = execSync(
+      'security find-generic-password -s "Claude Code-credentials" -w',
+      { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] },
+    ).trim();
+    const creds = JSON.parse(raw);
+    const token = creds?.claudeAiOauth?.accessToken;
+    const expiresAt = creds?.claudeAiOauth?.expiresAt || 0;
+    if (token && expiresAt > Date.now()) {
+      logger.info('Fresh OAuth token read from Keychain');
+      return token;
+    }
+    logger.warn('Keychain token expired or missing');
+  } catch (e: any) {
+    logger.debug({ err: e.message }, 'Could not read Keychain (expected on Linux)');
+  }
+  return null;
+}
+
 export function startCredentialProxy(
   port: number,
   host = '127.0.0.1',
@@ -115,9 +136,26 @@ export function startCredentialProxy(
     'ANTHROPIC_BASE_URL',
   ]);
 
+  // Try keychain first, fall back to .env
+  const keychainToken = readKeychainToken();
+  if (keychainToken) {
+    secrets.CLAUDE_CODE_OAUTH_TOKEN = keychainToken;
+  }
+
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
-  const oauthToken =
+  let oauthToken =
     secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
+
+  // Periodically refresh token from keychain (every 30 min)
+  if (process.platform === 'darwin') {
+    setInterval(() => {
+      const fresh = readKeychainToken();
+      if (fresh && fresh !== oauthToken) {
+        oauthToken = fresh;
+        logger.info('OAuth token refreshed from Keychain');
+      }
+    }, 30 * 60 * 1000);
+  }
 
   const upstreamUrl = new URL(
     secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
