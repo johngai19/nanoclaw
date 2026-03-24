@@ -120,7 +120,10 @@ function readKeychainToken(): string | null {
     }
     logger.warn('Keychain token expired or missing');
   } catch (e: any) {
-    logger.debug({ err: e.message }, 'Could not read Keychain (expected on Linux)');
+    logger.debug(
+      { err: e.message },
+      'Could not read Keychain (expected on Linux)',
+    );
   }
   return null;
 }
@@ -148,13 +151,16 @@ export function startCredentialProxy(
 
   // Periodically refresh token from keychain (every 30 min)
   if (process.platform === 'darwin') {
-    setInterval(() => {
-      const fresh = readKeychainToken();
-      if (fresh && fresh !== oauthToken) {
-        oauthToken = fresh;
-        logger.info('OAuth token refreshed from Keychain');
-      }
-    }, 30 * 60 * 1000);
+    setInterval(
+      () => {
+        const fresh = readKeychainToken();
+        if (fresh && fresh !== oauthToken) {
+          oauthToken = fresh;
+          logger.info('OAuth token refreshed from Keychain');
+        }
+      },
+      30 * 60 * 1000,
+    );
   }
 
   const upstreamUrl = new URL(
